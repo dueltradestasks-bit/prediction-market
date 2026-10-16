@@ -159,6 +159,26 @@ describe('featured series rollover context', () => {
     expect(mocks.loadHomeFeaturedNews.mock.calls[0]?.[1].id).toBe(nextEvent.id)
   })
 
+  it.each([{ status: 'resolved' }, { status: 'archived' }, { resolved_at: new Date().toISOString() }])(
+    'recovers an early-ended predecessor with %j before its scheduled end',
+    async (endedFields) => {
+      const endedEvent = { ...currentEvent, ...endedFields }
+      mocks.resolvePublicTargets.mockResolvedValue({ data: [{ ...target, eventId: nextEvent.id }], error: null })
+      mocks.getEventBySlug.mockImplementation(async (slug: string) => ({
+        data: slug === currentEvent.slug ? endedEvent : nextEvent,
+        error: null,
+      }))
+      mocks.getSeriesEventsBySeriesSlug.mockResolvedValue({ data: [endedEvent, nextEvent], error: null })
+      const { getNextHomeFeaturedSeriesRolloverEvent } = await import('@/lib/home-featured-events')
+      const result = await getNextHomeFeaturedSeriesRolloverEvent(currentEvent.slug, 'featured', 'en')
+
+      expect(result?.currentEventId).toBe(currentEvent.id)
+      expect(result?.nextEvent?.event.id).toBe(nextEvent.id)
+      expect(mocks.loadHomeFeaturedNews).toHaveBeenCalledTimes(1)
+      expect(mocks.loadHomeFeaturedNews.mock.calls[0]?.[1].id).toBe(nextEvent.id)
+    },
+  )
+
   it('keeps current news until the latest market cutoff even if the event date has passed', async () => {
     const overlappingEvent = {
       ...currentEvent,

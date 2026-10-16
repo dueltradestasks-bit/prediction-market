@@ -428,7 +428,13 @@ export async function getNextHomeFeaturedSeriesRolloverEvent(
     .filter((entry) => entry.status === 'active' && Date.parse(entry.end_date ?? '') > now)
     .sort((left, right) => Date.parse(left.end_date!) - Date.parse(right.end_date!))[0]
   const previousSeriesEntry = (seriesEvents ?? [])
-    .filter((entry) => Date.parse(entry.end_date ?? '') <= now)
+    .filter(
+      (entry) =>
+        entry.status === 'resolved' ||
+        entry.status === 'archived' ||
+        Boolean(entry.resolved_at) ||
+        Date.parse(entry.end_date ?? '') <= now,
+    )
     .sort((left, right) => Date.parse(right.end_date!) - Date.parse(left.end_date!))[0]
   const isImmediatePredecessor =
     Boolean(liveSeriesEntry) &&
