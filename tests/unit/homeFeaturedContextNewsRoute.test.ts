@@ -48,6 +48,38 @@ describe('home featured context news route', () => {
     mocks.requestOpenRouterCompletion.mockReset()
   })
 
+  it('returns up to five news articles from the admin search', async () => {
+    mocks.getCurrentUser.mockResolvedValue({ id: 'admin-1', is_admin: true })
+    mocks.getSettings.mockResolvedValue({ data: {}, error: null })
+    mocks.parseOpenRouterProviderSettings.mockReturnValue({ apiKey: 'openrouter-key', model: 'openai/gpt-4o-mini' })
+    const news = Array.from({ length: 6 }, (_, index) => ({
+      title: `Story ${index + 1}`,
+      source: 'Publisher',
+      url: `https://example.com/story-${index + 1}`,
+      publishedAt: null,
+    }))
+    mocks.requestOpenRouterCompletion.mockResolvedValue(JSON.stringify({ news }))
+    mocks.fetchHomeFeaturedNewsMetadata.mockImplementation(async (url: string) => ({
+      ...news.find((item) => item.url === url),
+      faviconUrl: null,
+    }))
+
+    const { POST } = await import('@/app/[locale]/admin/api/home-featured-events/context-news/route')
+    const response = await POST(
+      new Request('https://example.com/admin/api/home-featured-events/context-news', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Brazil vs Norway', locale: 'pt' }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    const payload = await response.json()
+    expect(payload.items).toHaveLength(5)
+    expect(payload.items[4].url).toBe(news[4]!.url)
+    expect(mocks.requestOpenRouterCompletion.mock.calls[0]![0][1].content).toContain('Return at most 5 results')
+  })
+
   it('does not return AI fallback URLs when the metadata host validation rejects them', async () => {
     mocks.getCurrentUser.mockResolvedValue({ id: 'admin-1', is_admin: true })
     mocks.getSettings.mockResolvedValue({ data: {}, error: null })
