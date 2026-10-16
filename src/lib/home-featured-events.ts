@@ -35,7 +35,7 @@ import { buildPublicEventListVisibilityCondition } from '@/lib/event-visibility'
 import { resolveEventPagePath } from '@/lib/events-routing'
 import { formatDollarValueLabel } from '@/lib/formatters'
 import { loadHomeFeaturedNews } from '@/lib/home-featured-news'
-import { findNextHomeFeaturedSeriesEvent } from '@/lib/home-featured-rollover'
+import { findNextHomeFeaturedSeriesEvent, isHomeFeaturedEventEnded } from '@/lib/home-featured-rollover'
 import { getHomeFeaturedSettingsFromSettings } from '@/lib/home-featured-settings'
 import { HOME_INITIAL_EVENTS_CACHE_LIFE } from '@/lib/home-initial-events-cache'
 import { resolveDisplayPrice } from '@/lib/market-chance'
@@ -427,7 +427,14 @@ export async function getNextHomeFeaturedSeriesRolloverEvent(
   const liveSeriesEntry = (seriesEvents ?? [])
     .filter((entry) => entry.status === 'active' && Date.parse(entry.end_date ?? '') > now)
     .sort((left, right) => Date.parse(left.end_date!) - Date.parse(right.end_date!))[0]
-  if (currentEvent.id !== target.eventId && currentEvent.id !== liveSeriesEntry?.id) {
+  const previousSeriesEntry = (seriesEvents ?? [])
+    .filter((entry) => Date.parse(entry.end_date ?? '') <= now)
+    .sort((left, right) => Date.parse(right.end_date!) - Date.parse(left.end_date!))[0]
+  const isImmediatePredecessor =
+    Boolean(liveSeriesEntry) &&
+    currentEvent.id === previousSeriesEntry?.id &&
+    isHomeFeaturedEventEnded(currentEvent, now)
+  if (currentEvent.id !== target.eventId && currentEvent.id !== liveSeriesEntry?.id && !isImmediatePredecessor) {
     return null
   }
 
@@ -442,7 +449,7 @@ export async function getNextHomeFeaturedSeriesRolloverEvent(
     refreshNews: true,
   }
   const [contextItems, nextContextItems] = await Promise.all([
-    resolveContextItems({ ...contextInput, event: currentEvent }),
+    isImmediatePredecessor ? [] : resolveContextItems({ ...contextInput, event: currentEvent }),
     nextEvent ? resolveContextItems({ ...contextInput, event: nextEvent }) : [],
   ])
 
@@ -891,7 +898,7 @@ async function resolveContextItems(input: {
     return newsItems
   }
 
-  return mode === 'news' ? (await fetchCompactComments(event.slug, settings.commentBlacklist)).items : comments.items
+  return comments.items
 }
 
 export async function listHomeFeaturedEvents(

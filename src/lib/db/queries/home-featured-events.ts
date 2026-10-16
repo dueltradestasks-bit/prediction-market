@@ -27,7 +27,7 @@ import { settings } from '@/lib/db/schema/settings/tables'
 import { runQuery } from '@/lib/db/utils/run-query'
 import { db } from '@/lib/drizzle'
 import { buildPublicEventListVisibilityCondition } from '@/lib/event-visibility'
-import { HOME_FEATURED_NEWS_LIMIT } from '@/lib/home-featured-settings'
+import { HOME_FEATURED_NEWS_LIMIT, HOME_FEATURED_NEWS_TTL_MS } from '@/lib/home-featured-settings'
 import { getPublicAssetUrl } from '@/lib/storage'
 
 export interface HomeFeaturedResolvedTarget {
@@ -132,6 +132,18 @@ function toOptionalNumber(value: unknown) {
 
 function normalizeContextDate(value: Date | null | undefined) {
   return value instanceof Date && Number.isFinite(value.getTime()) ? value : null
+}
+
+function parseNewsRefreshExpirations(value: string | undefined): Record<string, number> {
+  try {
+    return Object.fromEntries(
+      Object.entries(JSON.parse(value ?? '{}') ?? {}).filter(
+        ([, expiry]) => typeof expiry === 'number' && Number.isFinite(expiry),
+      ),
+    ) as Record<string, number>
+  } catch {
+    return {}
+  }
 }
 
 function normalizeReplaceContextItems(items: ReplaceHomeFeaturedContextItemInput[] | null | undefined) {
@@ -865,6 +877,7 @@ export const HomeFeaturedEventsRepository = {
     generate: () => Promise<ReplaceHomeFeaturedContextItemInput[]>,
   ): Promise<QueryResult<HomeFeaturedContextItem[]>> {
     return runQuery(async () => {
+      let refreshed = false
       const data = await db.transaction(async (tx) => {
         // Share the refresh lock across server instances without holding a settings row lock.
         const key = `home-featured-news:${featuredEventId}:${eventId}:${locale}`
@@ -872,7 +885,6 @@ export const HomeFeaturedEventsRepository = {
 
         const existing = await HomeFeaturedEventsRepository.listContextItems([featuredEventId], locale, {
           eventIdsByFeaturedId: new Map([[featuredEventId, eventId]]),
-          includeDefaultFallback: true,
           transaction: tx,
         })
         if (existing.error) {
@@ -883,16 +895,42 @@ export const HomeFeaturedEventsRepository = {
           return items
         }
 
-        const rows = await replaceContextItemsInTransaction(
-          tx,
-          featuredEventId,
-          eventId,
-          locale,
-          normalizeReplaceContextItems(await generate()),
-          true,
-        )
+        const refreshKey = `${featuredEventId}:${eventId}:${locale}`
+        const markerFilter = and(eq(settings.group, 'cache'), eq(settings.key, 'home_featured_news_refreshes'))
+        async function readMarker() {
+          const [row] = await tx.select({ value: settings.value }).from(settings).where(markerFilter).limit(1)
+          return row
+        }
+        const marker = await readMarker()
+        if ((parseNewsRefreshExpirations(marker?.value)[refreshKey] ?? 0) > Date.now()) {
+          return []
+        }
+
+        const generated = normalizeReplaceContextItems(await generate())
+        const rows = await replaceContextItemsInTransaction(tx, featuredEventId, eventId, locale, generated, true)
+        if (!rows?.length) {
+          // Different event locks share one persisted map; serialize only its update.
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended('home-featured-news-refreshes', 0))`)
+          const currentMarker = await readMarker()
+          const now = Date.now()
+          const expirations = Object.fromEntries(
+            Object.entries(parseNewsRefreshExpirations(currentMarker?.value)).filter(([, expiry]) => expiry > now),
+          )
+          expirations[refreshKey] = now + HOME_FEATURED_NEWS_TTL_MS
+          const value = JSON.stringify(expirations)
+          if (currentMarker) {
+            await tx.update(settings).set({ value }).where(markerFilter)
+          } else {
+            await tx.insert(settings).values({ group: 'cache', key: 'home_featured_news_refreshes', value })
+          }
+        }
+
+        refreshed = true
         return (rows ?? []).map(mapContextRow)
       })
+      if (refreshed) {
+        revalidateTag(cacheTags.homeFeaturedEvents, { expire: 0 })
+      }
       return { data, error: null }
     })
   },

@@ -56,7 +56,11 @@ import {
   localizeHomeFeaturedMarketDates,
   resolveHomeFeaturedFullLidTitleValues,
 } from '@/lib/home-featured-localization'
-import { isHomeFeaturedEventEnded, resolveHomeFeaturedEventEndTimestamp } from '@/lib/home-featured-rollover'
+import {
+  isHomeFeaturedEventEnded,
+  replaceHomeFeaturedRolloverSuccessor,
+  resolveHomeFeaturedEventEndTimestamp,
+} from '@/lib/home-featured-rollover'
 import {
   DEFAULT_HOME_FEATURED_SIDE_CARD_TEXT,
   DEFAULT_HOME_FEATURED_SIDE_CARD_TITLE,
@@ -2032,17 +2036,7 @@ function useHomeFeaturedRolloverItem(item: HomeFeaturedEventCard) {
               return current
             }
 
-            const existingIndex = nextEvent
-              ? current.events.findIndex((entry) => entry.event.id === nextEvent.event.id)
-              : -1
-            const events = [...current.events]
-            if (nextEvent) {
-              if (existingIndex >= 0) {
-                events[existingIndex] = nextEvent
-              } else {
-                events.push(nextEvent)
-              }
-            }
+            const events = replaceHomeFeaturedRolloverSuccessor(current.events, current.activeIndex, nextEvent)
             return { ...current, events, contextItems: payload.contextItems ?? current.contextItems }
           })
           retryAttempt = 0
