@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, exists, gt, inArray, isNull, lte, not, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, exists, gt, inArray, isNotNull, isNull, lte, not, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { cacheTag, revalidateTag } from 'next/cache'
 
@@ -27,6 +27,7 @@ import { settings } from '@/lib/db/schema/settings/tables'
 import { runQuery } from '@/lib/db/utils/run-query'
 import { db } from '@/lib/drizzle'
 import { buildPublicEventListVisibilityCondition } from '@/lib/event-visibility'
+import { HOME_FEATURED_NEWS_LIMIT, HOME_FEATURED_NEWS_TTL_MS } from '@/lib/home-featured-settings'
 import { getPublicAssetUrl } from '@/lib/storage'
 
 export interface HomeFeaturedResolvedTarget {
@@ -133,6 +134,18 @@ function normalizeContextDate(value: Date | null | undefined) {
   return value instanceof Date && Number.isFinite(value.getTime()) ? value : null
 }
 
+function parseNewsRefreshExpirations(value: string | undefined): Record<string, number> {
+  try {
+    return Object.fromEntries(
+      Object.entries(JSON.parse(value ?? '{}') ?? {}).filter(
+        ([, expiry]) => typeof expiry === 'number' && Number.isFinite(expiry),
+      ),
+    ) as Record<string, number>
+  } catch {
+    return {}
+  }
+}
+
 function normalizeReplaceContextItems(items: ReplaceHomeFeaturedContextItemInput[] | null | undefined) {
   if (!Array.isArray(items)) {
     return null
@@ -142,7 +155,7 @@ function normalizeReplaceContextItems(items: ReplaceHomeFeaturedContextItemInput
 
   return items
     .filter((item) => item.source.trim() && item.title.trim())
-    .slice(0, 3)
+    .slice(0, HOME_FEATURED_NEWS_LIMIT)
     .map((item) => ({
       locale: item.locale.trim() || 'en',
       item_type: item.itemType,
@@ -220,6 +233,10 @@ async function replaceContextItemsInTransaction(
       and(
         eq(home_featured_event_context_items.featured_event_id, featuredEventId),
         inArray(home_featured_event_context_items.locale, localesToReplace),
+        or(
+          eq(home_featured_event_context_items.event_id, eventId),
+          lte(home_featured_event_context_items.expires_at, new Date()),
+        ),
         ...(preserveManual ? [eq(home_featured_event_context_items.is_manual, false)] : []),
       ),
     )
@@ -228,22 +245,25 @@ async function replaceContextItemsInTransaction(
     return
   }
 
-  await tx.insert(home_featured_event_context_items).values(
-    items.map((item) => ({
-      featured_event_id: featuredEventId,
-      event_id: eventId,
-      locale: item.locale,
-      item_type: item.item_type,
-      source: item.source,
-      title: item.title,
-      url: item.url,
-      favicon_url: item.favicon_url,
-      published_at: item.published_at,
-      relevance_score: item.relevance_score,
-      expires_at: item.expires_at,
-      is_manual: item.is_manual,
-    })),
-  )
+  return tx
+    .insert(home_featured_event_context_items)
+    .values(
+      items.map((item) => ({
+        featured_event_id: featuredEventId,
+        event_id: eventId,
+        locale: item.locale,
+        item_type: item.item_type,
+        source: item.source,
+        title: item.title,
+        url: item.url,
+        favicon_url: item.favicon_url,
+        published_at: item.published_at,
+        relevance_score: item.relevance_score,
+        expires_at: item.expires_at,
+        is_manual: item.is_manual,
+      })),
+    )
+    .returning()
 }
 
 async function replaceFeaturedEventsInTransaction(
@@ -404,6 +424,7 @@ async function resolveSeriesTarget(seriesSlug: string) {
   if (!normalizedSeriesSlug) {
     return null
   }
+  const now = new Date()
 
   const rows = await db
     .select({
@@ -425,6 +446,40 @@ async function resolveSeriesTarget(seriesSlug: string) {
         eq(events.is_hidden, false),
         buildPublicEventListVisibilityCondition(events.id),
         hasActiveFeaturedMarketCondition(),
+        or(
+          gt(events.end_date, now),
+          exists(
+            db
+              .select({ condition_id: markets.condition_id })
+              .from(markets)
+              .where(
+                and(
+                  eq(markets.event_id, events.id),
+                  eq(markets.is_active, true),
+                  eq(markets.is_resolved, false),
+                  gt(markets.end_time, now),
+                ),
+              ),
+          ),
+          and(
+            isNull(events.end_date),
+            not(
+              exists(
+                db
+                  .select({ condition_id: markets.condition_id })
+                  .from(markets)
+                  .where(
+                    and(
+                      eq(markets.event_id, events.id),
+                      eq(markets.is_active, true),
+                      eq(markets.is_resolved, false),
+                      isNotNull(markets.end_time),
+                    ),
+                  ),
+              ),
+            ),
+          ),
+        ),
       ),
     )
     .orderBy(
@@ -585,6 +640,68 @@ function resolveAdminFeaturedEventTarget(row: AdminFeaturedEventRow, seriesTarge
 }
 
 export const HomeFeaturedEventsRepository = {
+  async resolveLiveSeriesDestination(
+    seriesSlug: string,
+    selectedMarketSlug: string | null,
+    selectedConditionId: string | null,
+  ): Promise<QueryResult<{ eventSlug: string; marketSlug: string | null; conditionId: string | null } | null>> {
+    return runQuery(async () => {
+      const event = await resolveSeriesTarget(seriesSlug)
+      if (!event) {
+        return { data: null, error: null }
+      }
+
+      if (!selectedMarketSlug && !selectedConditionId) {
+        return { data: { eventSlug: event.slug, marketSlug: null, conditionId: null }, error: null }
+      }
+
+      const currentMarkets = await db
+        .select({
+          condition_id: markets.condition_id,
+          slug: markets.slug,
+          title: markets.title,
+          short_title: markets.short_title,
+        })
+        .from(markets)
+        .where(and(eq(markets.event_id, event.id), eq(markets.is_active, true), eq(markets.is_resolved, false)))
+      const oldMarket = selectedConditionId
+        ? (
+            await db
+              .select({ title: markets.title, short_title: markets.short_title })
+              .from(markets)
+              .where(eq(markets.condition_id, selectedConditionId))
+              .limit(1)
+          )[0]
+        : null
+      const exactMatches = currentMarkets.filter(
+        (market) => market.slug === selectedMarketSlug || market.condition_id === selectedConditionId,
+      )
+      const oldTitle = oldMarket?.short_title?.trim().toLowerCase() || oldMarket?.title.trim().toLowerCase()
+      const titleMatches = oldTitle
+        ? currentMarkets.filter(
+            (market) => (market.short_title?.trim().toLowerCase() || market.title.trim().toLowerCase()) === oldTitle,
+          )
+        : []
+      const selectedMarket =
+        exactMatches.length === 1
+          ? exactMatches[0]
+          : titleMatches.length === 1
+            ? titleMatches[0]
+            : currentMarkets.length === 1
+              ? currentMarkets[0]
+              : null
+
+      return {
+        data: {
+          eventSlug: event.slug,
+          marketSlug: selectedMarket?.slug ?? null,
+          conditionId: selectedMarket?.condition_id ?? null,
+        },
+        error: null,
+      }
+    })
+  },
+
   async listAdminFeaturedEvents(locale?: string): Promise<QueryResult<HomeFeaturedEventAdminItem[]>> {
     return runQuery(async () => {
       const rows = await db
@@ -791,6 +908,8 @@ export const HomeFeaturedEventsRepository = {
     options: {
       includeDefaultFallback?: boolean
       eventIdsByFeaturedId?: Map<string, string | null | undefined>
+      itemType?: 'news' | 'comment'
+      transaction?: HomeFeaturedTransaction
     } = {},
   ): Promise<QueryResult<Map<string, HomeFeaturedContextItem[]>>> {
     if (featuredEventIds.length === 0) {
@@ -809,7 +928,7 @@ export const HomeFeaturedEventsRepository = {
             .filter((eventId): eventId is string => Boolean(eventId)),
         ),
       )
-      const rows = await db
+      const rows = await (options.transaction ?? db)
         .select()
         .from(home_featured_event_context_items)
         .where(
@@ -819,6 +938,7 @@ export const HomeFeaturedEventsRepository = {
             ...(allowedEventIds.length > 0
               ? [inArray(home_featured_event_context_items.event_id, allowedEventIds)]
               : []),
+            ...(options.itemType ? [eq(home_featured_event_context_items.item_type, options.itemType)] : []),
             gt(home_featured_event_context_items.expires_at, now),
           ),
         )
@@ -839,13 +959,79 @@ export const HomeFeaturedEventsRepository = {
         }
 
         const items = itemsByFeaturedId.get(row.featured_event_id) ?? []
-        if (items.length < 3) {
+        if (items.length < HOME_FEATURED_NEWS_LIMIT) {
           items.push(mapContextRow(row))
           itemsByFeaturedId.set(row.featured_event_id, items)
         }
       }
 
       return { data: itemsByFeaturedId, error: null }
+    })
+  },
+
+  async getOrCreateContextItems(
+    featuredEventId: string,
+    eventId: string,
+    locale: string,
+    generate: () => Promise<ReplaceHomeFeaturedContextItemInput[]>,
+  ): Promise<QueryResult<HomeFeaturedContextItem[]>> {
+    return runQuery(async () => {
+      let refreshed = false
+      const data = await db.transaction(async (tx) => {
+        // Share the refresh lock across server instances without holding a settings row lock.
+        const key = `home-featured-news:${featuredEventId}:${eventId}:${locale}`
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`)
+
+        const existing = await HomeFeaturedEventsRepository.listContextItems([featuredEventId], locale, {
+          eventIdsByFeaturedId: new Map([[featuredEventId, eventId]]),
+          itemType: 'news',
+          transaction: tx,
+        })
+        if (existing.error) {
+          throw new Error(existing.error)
+        }
+        const items = existing.data?.get(featuredEventId) ?? []
+        if (items.length > 0) {
+          return items
+        }
+
+        const refreshKey = `${featuredEventId}:${eventId}:${locale}`
+        const markerFilter = and(eq(settings.group, 'cache'), eq(settings.key, 'home_featured_news_refreshes'))
+        async function readMarker() {
+          const [row] = await tx.select({ value: settings.value }).from(settings).where(markerFilter).limit(1)
+          return row
+        }
+        const marker = await readMarker()
+        if ((parseNewsRefreshExpirations(marker?.value)[refreshKey] ?? 0) > Date.now()) {
+          return []
+        }
+
+        const generated = normalizeReplaceContextItems(await generate())
+        const rows = await replaceContextItemsInTransaction(tx, featuredEventId, eventId, locale, generated, true)
+        if (!rows?.length) {
+          // Different event locks share one persisted map; serialize only its update.
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended('home-featured-news-refreshes', 0))`)
+          const currentMarker = await readMarker()
+          const now = Date.now()
+          const expirations = Object.fromEntries(
+            Object.entries(parseNewsRefreshExpirations(currentMarker?.value)).filter(([, expiry]) => expiry > now),
+          )
+          expirations[refreshKey] = now + HOME_FEATURED_NEWS_TTL_MS
+          const value = JSON.stringify(expirations)
+          if (currentMarker) {
+            await tx.update(settings).set({ value }).where(markerFilter)
+          } else {
+            await tx.insert(settings).values({ group: 'cache', key: 'home_featured_news_refreshes', value })
+          }
+        }
+
+        refreshed = true
+        return (rows ?? []).map(mapContextRow)
+      })
+      if (refreshed) {
+        revalidateTag(cacheTags.homeFeaturedEvents, { expire: 0 })
+      }
+      return { data, error: null }
     })
   },
 
@@ -858,34 +1044,14 @@ export const HomeFeaturedEventsRepository = {
   ): Promise<QueryResult<null>> {
     return runQuery(async () => {
       await db.transaction(async (tx) => {
-        await tx
-          .delete(home_featured_event_context_items)
-          .where(
-            and(
-              eq(home_featured_event_context_items.featured_event_id, featuredEventId),
-              eq(home_featured_event_context_items.locale, locale),
-              ...(options.preserveManual ? [eq(home_featured_event_context_items.is_manual, false)] : []),
-            ),
-          )
-
-        if (items.length > 0) {
-          await tx.insert(home_featured_event_context_items).values(
-            items.slice(0, 3).map((item) => ({
-              featured_event_id: featuredEventId,
-              event_id: eventId,
-              locale,
-              item_type: item.itemType,
-              source: item.source,
-              title: item.title,
-              url: item.url ?? null,
-              favicon_url: item.faviconUrl ?? null,
-              published_at: item.publishedAt ?? null,
-              relevance_score: item.relevanceScore == null ? null : String(item.relevanceScore),
-              expires_at: item.expiresAt,
-              is_manual: Boolean(item.isManual),
-            })),
-          )
-        }
+        await replaceContextItemsInTransaction(
+          tx,
+          featuredEventId,
+          eventId,
+          locale,
+          normalizeReplaceContextItems(items.map((item) => ({ ...item, locale }))),
+          options.preserveManual,
+        )
       })
 
       revalidateTag(cacheTags.homeFeaturedEvents, { expire: 0 })

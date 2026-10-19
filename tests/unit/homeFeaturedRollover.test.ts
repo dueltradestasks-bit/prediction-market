@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'bun:test'
 
-import type { Event, EventSeriesEntry } from '@/types'
+import type { Event, EventSeriesEntry, HomeFeaturedContextItem, HomeFeaturedRolloverEvent } from '@/types'
 
 import {
+  applyHomeFeaturedRolloverResponse,
   findNextHomeFeaturedSeriesEvent,
   isHomeFeaturedEventEnded,
+  replaceHomeFeaturedRolloverSuccessor,
   resolveHomeFeaturedEventEndTimestamp,
+  resolveHomeFeaturedRolloverContextItems,
 } from '@/lib/home-featured-rollover'
 
 function createEvent(): Event {
@@ -73,7 +76,81 @@ describe('homeFeaturedRollover', () => {
 
     expect(next?.id).toBe('live-next')
   })
+
+  it('replaces the stale successor before the first rollover', () => {
+    const stale = createRolloverEvent('stale')
+    const next = createRolloverEvent('next')
+
+    expect(replaceHomeFeaturedRolloverSuccessor([stale], -1, next)).toEqual([next])
+  })
+
+  it('clears the successor when the server no longer returns one', () => {
+    expect(replaceHomeFeaturedRolloverSuccessor([createRolloverEvent('stale')], -1, null)).toEqual([])
+  })
+
+  it('preserves the promoted event and replaces all future entries after rollover', () => {
+    const active = createRolloverEvent('active')
+    const stale = createRolloverEvent('stale')
+    const next = createRolloverEvent('next')
+    const result = replaceHomeFeaturedRolloverSuccessor([active, stale, next], 0, next)
+
+    expect(result).toEqual([active, next])
+    expect(result[0]).toBe(active)
+  })
+
+  it('preserves the promoted event when the successor is removed after rollover', () => {
+    const active = createRolloverEvent('active')
+
+    expect(replaceHomeFeaturedRolloverSuccessor([active, createRolloverEvent('stale')], 0, null)).toEqual([active])
+  })
+
+  it('uses the refreshed successor data when the event is unchanged', () => {
+    const stale = createRolloverEvent('next')
+    const next = { ...stale, event: { ...stale.event, title: 'Updated event' } }
+
+    expect(replaceHomeFeaturedRolloverSuccessor([stale], -1, next)[0]).toBe(next)
+  })
+
+  it('reconciles a refresh after its stale successor has already been promoted', () => {
+    const stale = createRolloverEvent('next')
+    const refreshed = { ...stale, contextItems: [{ id: 'fresh-news' }] } as HomeFeaturedRolloverEvent
+    const result = applyHomeFeaturedRolloverResponse(
+      { activeIndex: 0, events: [stale], contextItems: [], sourceContextItems: [] },
+      'previous',
+      [],
+      { currentEventId: 'previous', nextEvent: refreshed },
+    )
+
+    expect(result.events[0]).toBe(refreshed)
+    expect(result.contextItems[0]?.id).toBe('fresh-news')
+  })
+
+  it('ignores an unrelated delayed rollover response', () => {
+    const active = createRolloverEvent('active')
+    const current = { activeIndex: 0, events: [active], contextItems: [], sourceContextItems: [] }
+
+    expect(
+      applyHomeFeaturedRolloverResponse(current, 'initial', [], {
+        currentEventId: 'old',
+        nextEvent: createRolloverEvent('different'),
+      }),
+    ).toBe(current)
+  })
+
+  it('uses refreshed props for the current event and queued context after rollover', () => {
+    const original: HomeFeaturedContextItem[] = []
+    const refreshed: HomeFeaturedContextItem[] = []
+    const queued: HomeFeaturedContextItem[] = []
+    const queue = { activeIndex: -1, events: [], contextItems: queued, sourceContextItems: original }
+
+    expect(resolveHomeFeaturedRolloverContextItems(queue, refreshed)).toBe(refreshed)
+    expect(resolveHomeFeaturedRolloverContextItems({ ...queue, activeIndex: 0 }, refreshed)).toBe(queued)
+  })
 })
+
+function createRolloverEvent(id: string): HomeFeaturedRolloverEvent {
+  return { event: { ...createEvent(), id }, contextItems: [] } as unknown as HomeFeaturedRolloverEvent
+}
 
 function createEventWithOverrides(overrides: Partial<Event>): Event {
   return { ...createEvent(), ...overrides }

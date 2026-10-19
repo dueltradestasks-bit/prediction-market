@@ -1,18 +1,19 @@
 'use client'
 
-import type { CSSProperties } from 'react'
+import type { ComponentProps, CSSProperties } from 'react'
 
 import { ChevronLeftIcon, ChevronRightIcon, FlameIcon } from 'lucide-react'
 import { useExtracted, useLocale } from 'next-intl'
 import dynamic from 'next/dynamic'
 import Image from 'next/image'
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { forwardRef, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 
 import type {
   LinePickerMarketType,
   SportsLinePickerOption,
 } from '@/app/[locale]/(platform)/sports/_components/_sports-games-center/sports-games-center-types'
 import type { SportsGamesButton, SportsGamesCard } from '@/app/[locale]/(platform)/sports/_utils/sports-games-data'
+import type { HomeFeaturedRolloverQueueState } from '@/lib/home-featured-rollover'
 import type {
   HomeFeaturedContextItem,
   HomeFeaturedEventCard,
@@ -56,7 +57,12 @@ import {
   localizeHomeFeaturedMarketDates,
   resolveHomeFeaturedFullLidTitleValues,
 } from '@/lib/home-featured-localization'
-import { isHomeFeaturedEventEnded, resolveHomeFeaturedEventEndTimestamp } from '@/lib/home-featured-rollover'
+import {
+  applyHomeFeaturedRolloverResponse,
+  isHomeFeaturedEventEnded,
+  resolveHomeFeaturedEventEndTimestamp,
+  resolveHomeFeaturedRolloverContextItems,
+} from '@/lib/home-featured-rollover'
 import {
   DEFAULT_HOME_FEATURED_SIDE_CARD_TEXT,
   DEFAULT_HOME_FEATURED_SIDE_CARD_TITLE,
@@ -538,11 +544,29 @@ function FeaturedHeaderActions({ event, className }: { event: HomeFeaturedEventC
   )
 }
 
+function resolveFeaturedDestinationHref(item: HomeFeaturedEventCard, locale: string) {
+  const seriesSlug =
+    item.targetType === 'series' && item.kind !== 'sports' ? item.resolvedSeriesSlug || item.event.series_slug : null
+  return seriesSlug
+    ? `/api/home-featured/live-link?seriesSlug=${encodeURIComponent(seriesSlug)}&locale=${encodeURIComponent(locale)}`
+    : resolveEventPagePath(item.event)
+}
+
+const FeaturedMarketLink = forwardRef<HTMLAnchorElement, ComponentProps<'a'> & { href: string }>(
+  function FeaturedMarketLink({ href, ...props }, ref) {
+    return href.startsWith('/api/home-featured/live-link?') ? (
+      <a {...props} href={href} ref={ref} />
+    ) : (
+      <Link {...props} href={href} ref={ref} />
+    )
+  },
+)
+
 function FeaturedHeader({ item, showActions = true }: { item: HomeFeaturedEventCard; showActions?: boolean }) {
   const t = useExtracted()
   const locale = useLocale()
   const event = item.event
-  const eventHref = resolveEventPagePath(event)
+  const eventHref = resolveFeaturedDestinationHref(item, locale)
   const cryptoCadencePresentation = resolveCryptoCadenceEventPresentation(event, locale)
   const breadcrumbItems = resolveFeaturedBreadcrumbItems(item).map((breadcrumbItem) => ({
     ...breadcrumbItem,
@@ -571,25 +595,28 @@ function FeaturedHeader({ item, showActions = true }: { item: HomeFeaturedEventC
     <div className="flex min-w-0 items-start justify-between gap-3">
       <div className="group/header flex min-w-0 flex-1 items-start gap-3">
         {item.kind !== 'sports' && (
-          <Link href={eventHref} className="size-11 shrink-0 overflow-hidden rounded-lg bg-muted md:size-12">
+          <FeaturedMarketLink
+            href={eventHref}
+            className="size-11 shrink-0 overflow-hidden rounded-lg bg-muted md:size-12"
+          >
             <EventIconImage
               src={event.icon_url || item.primaryMarkets[0]?.icon_url || '/images/pwa/default-icon-192.png'}
               alt={displayTitle}
               sizes="48px"
               containerClassName="size-full rounded-lg"
             />
-          </Link>
+          </FeaturedMarketLink>
         )}
         <div className="grid min-w-0 gap-1">
           {!cryptoCadencePresentation && <FeaturedBreadcrumb items={breadcrumbItems} />}
-          <Link
+          <FeaturedMarketLink
             href={eventHref}
             className={cn(
               `line-clamp-2 text-lg font-semibold tracking-tight underline-offset-4 group-hover/header:underline md:text-xl`,
             )}
           >
             {displayTitle}
-          </Link>
+          </FeaturedMarketLink>
           {cryptoCadencePresentation?.subtitle && (
             <span className="truncate text-xs text-muted-foreground md:text-sm">
               {cryptoCadencePresentation.subtitle}
@@ -608,6 +635,10 @@ function resolveFeaturedOutcomeHref(
   outcome: HomeFeaturedOutcomeSummary,
   fallbackHref: string,
 ) {
+  if (fallbackHref.startsWith('/api/home-featured/live-link?')) {
+    return `${fallbackHref}&outcomeIndex=${outcome.outcomeIndex}&marketSlug=${encodeURIComponent(outcome.marketSlug ?? '')}&conditionId=${encodeURIComponent(outcome.conditionId)}`
+  }
+
   return (
     resolveEventOutcomePath(event, {
       marketSlug: outcome.marketSlug,
@@ -632,7 +663,7 @@ function OutcomeRows({ item, linkedHref }: { item: HomeFeaturedEventCard; linked
         const label = normalizeOutcomeLabel(outcome.label)
 
         return (
-          <Link
+          <FeaturedMarketLink
             key={outcome.key}
             href={resolveFeaturedOutcomeHref(item.event, outcome, linkedHref)}
             className={cn(
@@ -655,7 +686,7 @@ function OutcomeRows({ item, linkedHref }: { item: HomeFeaturedEventCard; linked
               </span>
             </span>
             <span className="text-xl font-semibold tabular-nums">{formatChancePercent(outcome.chance)}</span>
-          </Link>
+          </FeaturedMarketLink>
         )
       })}
     </div>
@@ -700,7 +731,7 @@ function StandardActions({
             style={liveOutcomeAppearance?.style}
             nativeButton={false}
             render={
-              <Link
+              <FeaturedMarketLink
                 href={resolveFeaturedOutcomeHref(item.event, outcome, linkedHref)}
                 className="relative inline-flex size-full items-center justify-center"
               >
@@ -714,7 +745,7 @@ function StandardActions({
                   />
                 ) : null}
                 <span className="relative z-1 truncate">{normalizeOutcomeLabel(outcome.label)}</span>
-              </Link>
+              </FeaturedMarketLink>
             }
           />
         )
@@ -1288,7 +1319,11 @@ function ContextTickerItem({
       : formatContextRelativeTime(contextItem.publishedAt ?? contextItem.selectedAt, currentTimestamp, locale)
 
   return (
-    <Link key={`${contextItem.id}:${index}`} href={linkedHref} className="flex h-14 min-w-0 items-center gap-2">
+    <FeaturedMarketLink
+      key={`${contextItem.id}:${index}`}
+      href={linkedHref}
+      className="flex h-14 min-w-0 items-center gap-2"
+    >
       {(!isNews || !contextItem.faviconUrl) && <ContextAvatar contextItem={contextItem} />}
       <span className="grid min-w-0 gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-muted-foreground/60">
@@ -1311,7 +1346,7 @@ function ContextTickerItem({
         </span>
         <span className="line-clamp-2 text-xs/snug text-muted-foreground/75">{contextItem.title}</span>
       </span>
-    </Link>
+    </FeaturedMarketLink>
   )
 }
 
@@ -1952,13 +1987,10 @@ function FeaturedRightRailAction() {
   )
 }
 
-interface HomeFeaturedRolloverQueueState {
-  activeIndex: number
-  events: HomeFeaturedRolloverEvent[]
-}
-
 function buildHomeFeaturedRolloverQueueState(item: HomeFeaturedEventCard): HomeFeaturedRolloverQueueState {
   return {
+    contextItems: item.contextItems,
+    sourceContextItems: item.contextItems,
     activeIndex: -1,
     events: item.targetType === 'series' && item.nextSeriesEvent ? [item.nextSeriesEvent] : [],
   }
@@ -1981,12 +2013,6 @@ function useHomeFeaturedRolloverItem(item: HomeFeaturedEventCard) {
         return
       }
 
-      const futureEventCount = rolloverEvents.length - (activeIndex + 1)
-      if (futureEventCount >= 2) {
-        return
-      }
-
-      const lastKnownEvent = rolloverEvents.at(-1)?.event ?? activeEvent
       const controller = new AbortController()
       let retryTimeoutId: number | null = null
       let isActive = true
@@ -2008,7 +2034,8 @@ function useHomeFeaturedRolloverItem(item: HomeFeaturedEventCard) {
       async function loadNextRolloverEvent() {
         try {
           const query = new URLSearchParams({
-            currentEventSlug: lastKnownEvent.slug,
+            currentEventSlug: activeEvent.slug,
+            featuredId: item.featuredId,
             locale,
           })
           const response = await fetch(`/api/home-featured/series-rollover?${query.toString()}`, {
@@ -2019,27 +2046,20 @@ function useHomeFeaturedRolloverItem(item: HomeFeaturedEventCard) {
             throw new Error(`Featured rollover request failed with ${response.status}`)
           }
 
-          const payload = (await response.json()) as { nextEvent?: HomeFeaturedRolloverEvent | null }
-          const nextEvent = payload.nextEvent ?? null
+          const payload = (await response.json()) as {
+            currentEventId?: string
+            contextItems?: HomeFeaturedContextItem[]
+            nextEvent?: HomeFeaturedRolloverEvent | null
+          }
           if (!isActive) {
             return
           }
 
-          if (!nextEvent) {
-            scheduleRolloverRetry()
-            return
-          }
-
-          setQueueState((current) => {
-            if (current.events.some((event) => event.event.id === nextEvent.event.id)) {
-              return current
-            }
-
-            return {
-              ...current,
-              events: [...current.events, nextEvent],
-            }
-          })
+          setQueueState((current) =>
+            applyHomeFeaturedRolloverResponse(current, item.event.id, item.contextItems, payload),
+          )
+          retryAttempt = 0
+          retryTimeoutId = window.setTimeout(loadNextRolloverEvent, 60_000)
         } catch {
           if (isActive && !controller.signal.aborted) {
             scheduleRolloverRetry()
@@ -2057,7 +2077,7 @@ function useHomeFeaturedRolloverItem(item: HomeFeaturedEventCard) {
         }
       }
     },
-    [activeEvent, activeIndex, item.targetType, locale, rolloverEvents],
+    [activeEvent.slug, item.contextItems, item.event.id, item.featuredId, item.targetType, locale],
   )
 
   useEffect(
@@ -2084,13 +2104,14 @@ function useHomeFeaturedRolloverItem(item: HomeFeaturedEventCard) {
           }
 
           if (current.activeIndex < 0) {
-            return { ...current, activeIndex: 0 }
+            return { ...current, activeIndex: 0, contextItems: currentNextEvent.contextItems }
           }
 
           const promotedIndex = current.activeIndex + 1
           return {
             ...current,
             activeIndex: 0,
+            contextItems: currentNextEvent.contextItems,
             events: current.events.slice(promotedIndex),
           }
         })
@@ -2110,16 +2131,13 @@ function useHomeFeaturedRolloverItem(item: HomeFeaturedEventCard) {
   )
 
   return useMemo<HomeFeaturedEventCard>(() => {
-    if (!activeRolloverEvent) {
-      return item
-    }
-
     return {
       ...item,
       ...activeRolloverEvent,
+      contextItems: resolveHomeFeaturedRolloverContextItems(queueState, item.contextItems),
       nextSeriesEvent: nextRolloverEvent,
     }
-  }, [activeRolloverEvent, item, nextRolloverEvent])
+  }, [activeRolloverEvent, item, nextRolloverEvent, queueState])
 }
 
 function FeaturedSlide({
@@ -2141,7 +2159,7 @@ function FeaturedSlide({
   const locale = useLocale()
   const item = useMemo(() => localizeHomeFeaturedMarketDates(rolloverItem, locale), [locale, rolloverItem])
   const isMobile = useIsMobile()
-  const linkedHref = resolveEventPagePath(item.event)
+  const linkedHref = resolveFeaturedDestinationHref(item, locale)
   const shouldRenderChart = isChartEnabled && (isPrevious || isActive || isNext)
   const [chartContainerRef, chartContainerWidth] = useElementWidth<HTMLDivElement>(shouldRenderChart)
   const isSingleMarket = item.event.total_markets_count === 1 || item.event.markets.length === 1
