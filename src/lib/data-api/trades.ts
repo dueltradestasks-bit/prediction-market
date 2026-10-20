@@ -151,7 +151,7 @@ async function fetchEventTradesBatch({
       limit: normalizedPageSize.toString(),
       offset: pageParam.toString(),
       market: markets.join(','),
-      takerOnly: 'false',
+      takerOnly: 'true',
     })
 
     if (hasFilterAmount) {
@@ -186,7 +186,7 @@ async function fetchEventTradesBatch({
     limit: normalizedPageSize.toString(),
     offset: pageParam.toString(),
     market: markets.join(','),
-    takerOnly: 'false',
+    takerOnly: 'true',
   })
 
   if (hasFilterAmount) {

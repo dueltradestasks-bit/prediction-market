@@ -134,7 +134,7 @@ export async function GET(request: Request) {
       limit: limit.toString(),
       offset: offset.toString(),
       market,
-      takerOnly: 'false',
+      takerOnly: 'true',
     })
 
     if (hasFilterAmount) {

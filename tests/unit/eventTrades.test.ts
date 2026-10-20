@@ -46,7 +46,7 @@ describe('fetchEventTrades', () => {
       limit: '50',
       market: 'condition-1',
       offset: '0',
-      takerOnly: 'false',
+      takerOnly: 'true',
     })
   })
 
@@ -87,6 +87,7 @@ describe('fetchEventTrades', () => {
     expect(dataApiUrl.searchParams.get('cursorTimestamp')).toBe('1786017600')
     expect(dataApiUrl.searchParams.get('cursorId')).toBe('fill-9')
     expect(dataApiUrl.searchParams.get('cursorUser')).toBe('0xabc')
+    expect(dataApiUrl.searchParams.get('takerOnly')).toBe('true')
   })
 
   it('keeps up to 50 markets in one request and only splits the overflow', async () => {
