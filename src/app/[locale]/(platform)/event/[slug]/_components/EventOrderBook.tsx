@@ -57,6 +57,24 @@ export { useOrderBookSummaries }
 const orderBookHeaderLabelClass =
   'inline-flex -translate-y-px whitespace-nowrap text-[10px] leading-3 tracking-normal sm:text-xs sm:tracking-wide'
 const orderBookHeaderClass = 'py-3 text-xs font-semibold tracking-wide text-muted-foreground uppercase'
+const ROW_SHRINK_DELAY_MS = 3_000
+
+function useHeldRowCount(count: number, tokenId: string | undefined) {
+  const [held, setHeld] = useState({ count, tokenId })
+  const heldCount = held.tokenId === tokenId ? Math.max(count, held.count) : count
+
+  useEffect(() => {
+    if (held.tokenId === tokenId && count === held.count) {
+      return
+    }
+
+    const delay = held.tokenId !== tokenId || count > held.count ? 0 : ROW_SHRINK_DELAY_MS
+    const timeout = window.setTimeout(() => setHeld({ count, tokenId }), delay)
+    return () => window.clearTimeout(timeout)
+  }, [count, held, tokenId])
+
+  return heldCount
+}
 
 function EventOrderBookSkeletonRow() {
   return (
@@ -359,6 +377,8 @@ export default function EventOrderBook({
     () => buildOrderBookSnapshot(summary, market, outcome),
     [summary, market, outcome],
   )
+  const heldAskCount = useHeldRowCount(asks.length, tokenId)
+  const heldBidCount = useHeldRowCount(bids.length, tokenId)
   const displayOutcomeLabel = normalizeOutcomeLabel(outcomeLabel) ?? outcomeLabel
   const displayTradeLabel = tradeLabel ?? `${t('Trade')} ${displayOutcomeLabel}`
 
@@ -410,17 +430,20 @@ export default function EventOrderBook({
       ),
     [midpointCents, rewardConfig],
   )
-  const isMarketOrderBookEmpty = useMemo(
+  const hasMarketOrders = useMemo(
     () =>
-      Boolean(summaries) &&
-      market.outcomes.every((marketOutcome) => {
+      market.outcomes.some((marketOutcome) => {
         const marketSummary = marketOutcome.token_id ? summaries?.[marketOutcome.token_id] : null
-        return !marketSummary?.asks?.length && !marketSummary?.bids?.length
+        return Boolean(marketSummary?.asks?.length || marketSummary?.bids?.length)
       }),
     [market.outcomes, summaries],
   )
+  const heldMarketHasOrders = useHeldRowCount(Number(hasMarketOrders), market.condition_id) > 0
   const showLiquidityAction = Boolean(
-    isMarketOrderBookEmpty && currentTimestamp != null && canProvideMarketLiquidity(market, currentTimestamp),
+    summaries &&
+    !heldMarketHasOrders &&
+    currentTimestamp != null &&
+    canProvideMarketLiquidity(market, currentTimestamp),
   )
 
   const orderBookCenterRow = (
@@ -610,6 +633,9 @@ export default function EventOrderBook({
           </div>
         ) : (
           <>
+            {heldAskCount > Math.max(1, renderedAsks.length) && (
+              <div aria-hidden="true" style={{ height: (heldAskCount - Math.max(1, renderedAsks.length)) * 36 }} />
+            )}
             {renderedAsks.length > 0 ? (
               renderedAsks.map((level, index) => {
                 const userOrder = userOrdersByLevel.get(getOrderBookUserKey(level.side, level.priceCents))
@@ -656,6 +682,9 @@ export default function EventOrderBook({
               })
             ) : (
               <EventOrderBookEmptyRow label={t('No bids')} />
+            )}
+            {heldBidCount > Math.max(1, bids.length) && (
+              <div aria-hidden="true" style={{ height: (heldBidCount - Math.max(1, bids.length)) * 36 }} />
             )}
           </>
         )}
