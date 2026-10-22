@@ -6,7 +6,6 @@ import { stubGlobal, unstubAllGlobals } from '../bun-test-helpers'
 
 describe('fetchPortfolioSnapshot', () => {
   const originalDataUrl = process.env.DATA_URL
-  const originalUserPnlUrl = process.env.USER_PNL_URL
 
   afterEach(() => {
     unstubAllGlobals()
@@ -15,16 +14,10 @@ describe('fetchPortfolioSnapshot', () => {
     } else {
       process.env.DATA_URL = originalDataUrl
     }
-    if (originalUserPnlUrl === undefined) {
-      delete process.env.USER_PNL_URL
-    } else {
-      process.env.USER_PNL_URL = originalUserPnlUrl
-    }
   })
 
   it('uses the one-day PnL change and requests only the biggest closed position', async () => {
     process.env.DATA_URL = 'https://data-api.test'
-    process.env.USER_PNL_URL = 'https://user-pnl.test'
 
     const fetchMock = mock(async (input: RequestInfo | URL) => {
       const url = new URL(input instanceof Request ? input.url : input instanceof URL ? input.toString() : input)
@@ -67,13 +60,14 @@ describe('fetchPortfolioSnapshot', () => {
       user: `0x${'a'.repeat(40)}`,
     })
     const pnlUrl = urls.find((url) => url.pathname === '/user-pnl')
+    expect(pnlUrl?.origin).toBe('https://data-api.test')
+    expect(pnlUrl?.searchParams.get('user_address')).toBe(`0x${'a'.repeat(40)}`)
     expect(pnlUrl?.searchParams.get('interval')).toBe('1d')
     expect(pnlUrl?.searchParams.get('fidelity')).toBe('1h')
   })
 
   it('discards malformed PnL points before calculating the one-day change', async () => {
     process.env.DATA_URL = 'https://data-api.test'
-    process.env.USER_PNL_URL = 'https://user-pnl.test'
 
     const fetchMock = mock(async (input: RequestInfo | URL) => {
       const url = new URL(input instanceof Request ? input.url : input instanceof URL ? input.toString() : input)
@@ -105,5 +99,10 @@ describe('fetchPortfolioSnapshot', () => {
     await expect(fetchPortfolioSnapshot(`0x${'b'.repeat(40)}`)).resolves.toMatchObject({
       profitLoss: 20,
     })
+    const pnlUrl = fetchMock.mock.calls
+      .map(([input]) => new URL(input instanceof Request ? input.url : input instanceof URL ? input.toString() : input))
+      .find((url) => url.pathname === '/user-pnl')
+    expect(pnlUrl?.origin).toBe('https://data-api.test')
+    expect(pnlUrl?.searchParams.get('user_address')).toBe(`0x${'b'.repeat(40)}`)
   })
 })

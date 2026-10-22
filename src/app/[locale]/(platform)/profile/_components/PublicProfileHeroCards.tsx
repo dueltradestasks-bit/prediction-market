@@ -22,6 +22,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/components/ui/popover'
 import { usePublicRuntimeConfig } from '@/hooks/usePublicRuntimeConfig'
 import { useSiteIdentity } from '@/hooks/useSiteIdentity'
+import { buildDataApiUrl } from '@/lib/data-api/client'
 import { calculatePnlGainLossThroughTime, findNearestPnlPointByTime } from '@/lib/pnl-chart'
 import { cn } from '@/lib/utils'
 import { usePortfolioValueVisibility } from '@/stores/usePortfolioValueVisibility'
@@ -73,9 +74,7 @@ function usePnlSeries({
         interval,
         fidelity,
       })
-      const endpoint = new URL('/user-pnl', pnlBaseUrl)
-
-      fetch(`${endpoint.toString()}?${params.toString()}`, {
+      fetch(buildDataApiUrl('/user-pnl', params, pnlBaseUrl), {
         signal: controller.signal,
       })
         .then(async (response) => {
@@ -390,13 +389,13 @@ function ProfitLossCard({
   const t = useExtracted()
   const locale = useLocale()
   const site = useSiteIdentity()
-  const { userPnlUrl } = usePublicRuntimeConfig()
+  const { dataUrl } = usePublicRuntimeConfig()
   const platformName = site.name ?? ''
   const { activeTimeframe, setActiveTimeframe } = usePnlActiveTimeframe()
   const { lineGradientId, areaGradientId, areaFadeId, areaMaskId } = usePnlChartIds()
   const logoSvg = site.logoSvg.replace(/fill="url\([^"]+\)"/gi, 'fill="currentColor"')
   const pnlAddress = portfolioAddress
-  const pnlBaseUrl = userPnlUrl
+  const pnlBaseUrl = dataUrl
   const pnlSeriesKey = `${pnlAddress ?? ''}:${pnlBaseUrl}:${activeTimeframe}`
   const { pnlSeries } = usePnlSeries({ pnlAddress, pnlBaseUrl, activeTimeframe, pnlSeriesKey })
 

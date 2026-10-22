@@ -23,7 +23,6 @@ export interface PublicRuntimeConfig {
   sentryDsn: string
   subgraphsUrl: string
   siteUrl: string
-  userPnlUrl: string
   wsClobUrl: string
   wsLiveDataUrl: string
 }
@@ -36,7 +35,6 @@ const NETWORK_SERVICE_URLS = {
     gammaUrl: 'https://gamma-api-staging.kuest.com',
     relayerUrl: 'https://relayer-staging.kuest.com',
     subgraphsUrl: 'https://subgraphs-staging.kuest.com',
-    userPnlUrl: 'https://user-pnl-api-staging.kuest.com',
     wsClobUrl: 'wss://ws-subscriptions-clob-staging.kuest.com',
     wsLiveDataUrl: 'wss://ws-live-data-staging.kuest.com',
   },
@@ -47,7 +45,6 @@ const NETWORK_SERVICE_URLS = {
     gammaUrl: 'https://gamma-api.kuest.com',
     relayerUrl: 'https://relayer.kuest.com',
     subgraphsUrl: 'https://subgraphs.kuest.com',
-    userPnlUrl: 'https://user-pnl-api.kuest.com',
     wsClobUrl: 'wss://ws-subscriptions-clob.kuest.com',
     wsLiveDataUrl: 'wss://ws-live-data.kuest.com',
   },
@@ -81,7 +78,6 @@ export const defaultPublicRuntimeConfig: PublicRuntimeConfig = {
   sentryDsn: '',
   siteUrl: 'http://localhost:3000',
   subgraphsUrl: DEFAULT_AMOY_SERVICE_URLS.subgraphsUrl,
-  userPnlUrl: DEFAULT_AMOY_SERVICE_URLS.userPnlUrl,
   wsClobUrl: DEFAULT_AMOY_SERVICE_URLS.wsClobUrl,
   wsLiveDataUrl: DEFAULT_AMOY_SERVICE_URLS.wsLiveDataUrl,
 }
@@ -96,7 +92,6 @@ export function resolvePublicRuntimeEnv(
 ): Omit<PublicRuntimeConfig, 'commitSha' | 'siteUrl'> {
   const chainId = parseNetworkChainId(env.CHAIN_ID, defaultPublicRuntimeConfig.chainId)
   const networkServiceUrls = getNetworkServiceUrls(chainId)
-
   return {
     clobUrl: normalizePublicRuntimeEnvValue(env.CLOB_URL, networkServiceUrls.clobUrl),
     communityUrl: normalizePublicRuntimeEnvValue(env.COMMUNITY_URL, networkServiceUrls.communityUrl),
@@ -126,7 +121,6 @@ export function resolvePublicRuntimeEnv(
     sdkDownloadUrl: normalizePublicRuntimeEnvValue(env.SDK_DOWNLOAD_URL, defaultPublicRuntimeConfig.sdkDownloadUrl),
     sentryDsn: normalizePublicRuntimeEnvValue(env.SENTRY_DSN),
     subgraphsUrl: networkServiceUrls.subgraphsUrl,
-    userPnlUrl: normalizePublicRuntimeEnvValue(env.USER_PNL_URL, networkServiceUrls.userPnlUrl),
     wsClobUrl: normalizePublicRuntimeEnvValue(env.WS_CLOB_URL, networkServiceUrls.wsClobUrl),
     wsLiveDataUrl: normalizePublicRuntimeEnvValue(env.WS_LIVE_DATA_URL, networkServiceUrls.wsLiveDataUrl),
   }

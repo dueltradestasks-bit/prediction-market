@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 
 import { DEFAULT_ERROR_MESSAGE } from '@/lib/constants'
+import { buildDataApiUrl } from '@/lib/data-api/client'
 import { resolvePublicRuntimeEnv } from '@/lib/public-runtime-config.shared'
 import { normalizeAddress } from '@/lib/wallet'
 
@@ -188,8 +189,8 @@ async function waitForInFlightEntry(key: string, entry: InFlightEntry, signal: A
 }
 
 async function fetchUserTimeframePnl(period: TimePeriod, address: string, signal: AbortSignal): Promise<number | null> {
-  const { userPnlUrl } = resolvePublicRuntimeEnv(process.env)
-  if (!userPnlUrl) {
+  const { dataUrl } = resolvePublicRuntimeEnv(process.env)
+  if (!dataUrl) {
     return null
   }
 
@@ -224,8 +225,7 @@ async function fetchUserTimeframePnl(period: TimePeriod, address: string, signal
       fidelity,
     })
 
-    const endpoint = new URL('/user-pnl', userPnlUrl)
-    const response = await fetch(`${endpoint.toString()}?${params.toString()}`, {
+    const response = await fetch(buildDataApiUrl('/user-pnl', params, dataUrl), {
       signal: controller.signal,
       cache: 'no-store',
     })

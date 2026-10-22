@@ -33,7 +33,6 @@ const RUNTIME_ENV_KEYS_BY_CONFIG_KEY = {
   reownAppKitProjectId: 'REOWN_APPKIT_PROJECT_ID',
   sdkDownloadUrl: 'SDK_DOWNLOAD_URL',
   sentryDsn: 'SENTRY_DSN',
-  userPnlUrl: 'USER_PNL_URL',
   wsClobUrl: 'WS_CLOB_URL',
   wsLiveDataUrl: 'WS_LIVE_DATA_URL',
 } as const
@@ -77,6 +76,16 @@ describe('public runtime config resolution', () => {
     for (const key of KUEST_DEFAULT_CONFIG_KEYS) {
       expect(config[key]).toBe(`https://override.example/${key}`)
     }
+  })
+
+  it('uses DATA_URL as the sole Data API base even when a legacy User PNL URL is configured', () => {
+    const config = resolvePublicRuntimeEnv({
+      CHAIN_ID: '137',
+      DATA_URL: 'https://data-api.example',
+      USER_PNL_URL: 'https://user-pnl-api.kuest.com',
+    })
+    expect(config.dataUrl).toBe('https://data-api.example')
+    expect('userPnlUrl' in config).toBe(false)
   })
 
   it('parses CHAIN_ID from the environment', () => {

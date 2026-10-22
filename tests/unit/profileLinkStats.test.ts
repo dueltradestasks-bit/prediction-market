@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test'
 
 import { fetchProfileLinkStats } from '@/lib/data-api/profile-link-stats'
+import { resolvePublicRuntimeEnv } from '@/lib/public-runtime-config.shared'
 
 import {
   advanceTimersByTimeAsync,
@@ -23,11 +24,11 @@ describe('profileLinkStats', () => {
       const url = new URL(requestUrl)
       let body: unknown
 
-      if (url.pathname === '/value') {
+      if (url.pathname === '/gateway/value') {
         body = [{ value: 24.50555514 }]
-      } else if (url.pathname === '/volume') {
+      } else if (url.pathname === '/gateway/volume') {
         body = { volume: '103.792597' }
-      } else if (url.pathname === '/user-pnl') {
+      } else if (url.pathname === '/gateway/user-pnl') {
         body = [
           { t: 200, p: 4.69 },
           { t: 100, p: 0 },
@@ -40,9 +41,13 @@ describe('profileLinkStats', () => {
     })
     stubGlobal('fetch', fetchMock)
 
+    const config = resolvePublicRuntimeEnv({
+      CHAIN_ID: '137',
+      DATA_URL: 'https://data-api.test/gateway/',
+      USER_PNL_URL: 'https://user-pnl.test',
+    })
     const stats = await fetchProfileLinkStats(address, {
-      dataApiUrl: 'https://data-api.test',
-      userPnlUrl: 'https://user-pnl.test',
+      dataApiUrl: config.dataUrl,
     })
 
     expect(stats).toEqual({
@@ -51,6 +56,18 @@ describe('profileLinkStats', () => {
       volume: '103.792597',
     })
     expect(fetchMock).toHaveBeenCalledTimes(3)
+    const pnlUrl = fetchMock.mock.calls
+      .map(
+        ([input]) => new URL(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url),
+      )
+      .find((url) => url.pathname === '/gateway/user-pnl')
+    expect(pnlUrl?.origin).toBe('https://data-api.test')
+    expect(pnlUrl?.pathname).toBe('/gateway/user-pnl')
+    expect(Object.fromEntries(pnlUrl?.searchParams ?? [])).toEqual({
+      user_address: address,
+      interval: 'all',
+      fidelity: '12h',
+    })
   })
 
   it('reuses a pending request after the freshness TTL has elapsed', async () => {
@@ -67,7 +84,6 @@ describe('profileLinkStats', () => {
 
     const options = {
       dataApiUrl: 'https://data-api-delayed.test',
-      userPnlUrl: 'https://user-pnl-delayed.test',
     }
     const firstRequest = fetchProfileLinkStats(address, options)
     await Promise.resolve()
