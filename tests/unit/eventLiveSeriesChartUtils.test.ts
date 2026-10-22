@@ -13,6 +13,9 @@ import {
   formatTimeAtTimezone,
   getVisibleCountdownUnits,
   isCanonicalBinanceDailySnapshot,
+  isCanonicalGoldDailyCloseSnapshot,
+  isGoldDailySeries,
+  isGoldMarketSessionOpen,
   LIVE_PRICE_TRANSITION_MS,
   MAX_POINTS,
   POLYMARKET_CHAINLINK_TWAP_CUTOVER_MS,
@@ -24,8 +27,94 @@ import {
   resolveLiveSeriesCountdown,
   resolveLiveSeriesDisplayPrice,
   resolveLiveSeriesRealtimeTopic,
+  resolveLiveSeriesStartTimestamp,
   SERIES_KEY,
 } from '@/app/[locale]/(platform)/event/[slug]/_utils/eventLiveSeriesChartUtils'
+
+describe('GOLD daily live session', () => {
+  it('accepts a final price only from the matching closed Pyth XAUUSD window', () => {
+    const eventWindowStartTimestamp = Date.parse('2026-10-21T13:30:00Z')
+    const eventWindowEndTimestamp = Date.parse('2026-10-21T21:00:00Z')
+    const snapshot = {
+      series_slug: 'gold-daily-up-or-down',
+      instrument: 'XAUUSD',
+      interval: '1d' as const,
+      source: 'pyth' as const,
+      interval_ms: 86_400_000,
+      event_window_start_ms: eventWindowStartTimestamp,
+      event_window_end_ms: eventWindowEndTimestamp,
+      opening_price: 4100,
+      closing_price: 4150,
+      latest_price: 4150,
+      latest_window_end_ms: eventWindowEndTimestamp,
+      latest_source_timestamp_ms: eventWindowEndTimestamp,
+      is_event_closed: true,
+    }
+    const request = {
+      snapshot,
+      snapshotStatus: 'ready' as const,
+      eventWindowStartTimestamp,
+      eventWindowEndTimestamp,
+    }
+
+    expect(isCanonicalGoldDailyCloseSnapshot(request)).toBe(true)
+    expect(isCanonicalGoldDailyCloseSnapshot({ ...request, snapshotStatus: 'unavailable' })).toBe(false)
+    expect(isCanonicalGoldDailyCloseSnapshot({ ...request, snapshot: { ...snapshot, source: 'binance' } })).toBe(false)
+    expect(isCanonicalGoldDailyCloseSnapshot({ ...request, snapshot: { ...snapshot, instrument: 'AAPL' } })).toBe(false)
+    expect(isCanonicalGoldDailyCloseSnapshot({ ...request, snapshot: { ...snapshot, interval: '5m' } })).toBe(false)
+    expect(isCanonicalGoldDailyCloseSnapshot({ ...request, snapshot: { ...snapshot, is_event_closed: false } })).toBe(
+      false,
+    )
+    expect(isCanonicalGoldDailyCloseSnapshot({ ...request, snapshot: { ...snapshot, closing_price: null } })).toBe(
+      false,
+    )
+    expect(isCanonicalGoldDailyCloseSnapshot({ ...request, eventWindowStartTimestamp: 0 })).toBe(false)
+    expect(isCanonicalGoldDailyCloseSnapshot({ ...request, eventWindowEndTimestamp: 0 })).toBe(false)
+  })
+
+  it('uses the 9:30–17:00 ET market window instead of the early event publication date', () => {
+    const eventEndTimestamp = Date.parse('2026-10-21T21:00:00Z')
+    expect(isGoldDailySeries('gold-daily-up-or-down')).toBe(true)
+    expect(
+      resolveLiveSeriesStartTimestamp({
+        seriesSlug: 'gold-daily-up-or-down',
+        eventStartTimestamp: Date.parse('2026-10-20T12:01:22Z'),
+        eventEndTimestamp,
+        activeWindowMinutes: 450,
+      }),
+    ).toBe(Date.parse('2026-10-21T13:30:00Z'))
+    expect(
+      resolveLiveSeriesStartTimestamp({
+        seriesSlug: 'aapl-daily-up-down',
+        eventStartTimestamp: 123,
+        eventEndTimestamp,
+        activeWindowMinutes: 390,
+      }),
+    ).toBe(123)
+  })
+
+  it('honors the GOLD event hours, weekend, and daylight saving time', () => {
+    expect(isGoldMarketSessionOpen(Date.parse('2026-10-21T13:29:00Z'))).toBe(false)
+    expect(isGoldMarketSessionOpen(Date.parse('2026-10-21T13:30:00Z'))).toBe(true)
+    expect(isGoldMarketSessionOpen(Date.parse('2026-10-21T20:59:00Z'))).toBe(true)
+    expect(isGoldMarketSessionOpen(Date.parse('2026-10-21T21:00:00Z'))).toBe(false)
+    expect(isGoldMarketSessionOpen(Date.parse('2026-10-23T20:59:00Z'))).toBe(true)
+    expect(isGoldMarketSessionOpen(Date.parse('2026-10-24T16:00:00Z'))).toBe(false)
+    expect(isGoldMarketSessionOpen(Date.parse('2026-10-26T13:30:00Z'))).toBe(true)
+    expect(isGoldMarketSessionOpen(Date.parse('2026-11-09T14:29:00Z'))).toBe(false)
+    expect(isGoldMarketSessionOpen(Date.parse('2026-11-09T14:30:00Z'))).toBe(true)
+  })
+
+  it('selects the next GOLD round only when its trading session begins', () => {
+    const next = createSeriesEvent({
+      slug: 'xauusd-up-or-down-on-october-22-2026',
+      end_date: '2026-10-22T21:00:00Z',
+    })
+    const currentSlug = 'xauusd-up-or-down-on-october-21-2026'
+    expect(findLiveSeriesEvent([next], currentSlug, Date.parse('2026-10-22T13:29:00Z'), 450 * 60_000)).toBeNull()
+    expect(findLiveSeriesEvent([next], currentSlug, Date.parse('2026-10-22T13:31:00Z'), 450 * 60_000)).toEqual(next)
+  })
+})
 
 describe('live series date labels', () => {
   it('formats resolution dates and times with the page locale', () => {
