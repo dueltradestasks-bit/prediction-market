@@ -218,7 +218,7 @@ export function isCanonicalBinanceDailySnapshot(snapshot: LiveSeriesPriceSnapsho
   return snapshot?.source === 'binance' && snapshot.interval === '1d'
 }
 
-export function isCanonicalGoldDailyCloseSnapshot({
+function hasCanonicalDailyClose({
   snapshot,
   snapshotStatus,
   eventWindowStartTimestamp,
@@ -232,8 +232,6 @@ export function isCanonicalGoldDailyCloseSnapshot({
   return (
     snapshotStatus === 'ready' &&
     snapshot != null &&
-    isGoldDailySeries(snapshot.series_slug) &&
-    snapshot.instrument === 'XAUUSD' &&
     snapshot.source === 'pyth' &&
     snapshot.interval === '1d' &&
     snapshot.interval_ms === 24 * 60 * 60 * 1000 &&
@@ -245,6 +243,47 @@ export function isCanonicalGoldDailyCloseSnapshot({
     snapshot.closing_price != null &&
     Number.isFinite(snapshot.closing_price) &&
     snapshot.closing_price > 0
+  )
+}
+
+export function isCanonicalGoldDailyCloseSnapshot({
+  snapshot,
+  snapshotStatus,
+  eventWindowStartTimestamp,
+  eventWindowEndTimestamp,
+}: {
+  snapshot: LiveSeriesPriceSnapshot | null
+  snapshotStatus: LiveSeriesPriceSnapshotStatus
+  eventWindowStartTimestamp: number | null
+  eventWindowEndTimestamp: number | null
+}) {
+  return (
+    snapshot != null &&
+    isGoldDailySeries(snapshot.series_slug) &&
+    snapshot.instrument === 'XAUUSD' &&
+    hasCanonicalDailyClose({ snapshot, snapshotStatus, eventWindowStartTimestamp, eventWindowEndTimestamp })
+  )
+}
+
+export function isCanonicalEventBoundEquityCloseSnapshot({
+  snapshot,
+  snapshotStatus,
+  eventWindowStartTimestamp,
+  eventWindowEndTimestamp,
+  expectedInstrument,
+}: {
+  snapshot: LiveSeriesPriceSnapshot | null
+  snapshotStatus: LiveSeriesPriceSnapshotStatus
+  eventWindowStartTimestamp: number | null
+  eventWindowEndTimestamp: number | null
+  expectedInstrument: string
+}) {
+  return (
+    snapshotStatus === 'ready' &&
+    snapshot != null &&
+    (snapshot.series_slug === 'hood-daily-up-or-down' || snapshot.series_slug === 'coin-daily-up-or-down') &&
+    snapshot.instrument === expectedInstrument &&
+    hasCanonicalDailyClose({ snapshot, snapshotStatus, eventWindowStartTimestamp, eventWindowEndTimestamp })
   )
 }
 
